@@ -1,0 +1,298 @@
+// DSA Quest — database schema
+// Provider: PostgreSQL (works with any Postgres: local Docker, Neon, Supabase, Railway, RDS...)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & progression
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  passwordHash  String
+  avatarClass   String   @default("Wanderer") // Wanderer, Cipher, Warden, Sage — cosmetic RPG class
+  createdAt     DateTime @default(now())
+
+  xp            Int      @default(0)
+  level         Int      @default(1)
+  coins         Int      @default(0)
+
+  currentStreak Int      @default(0)
+  longestStreak Int      @default(0)
+  lastActiveAt  DateTime?
+
+  topicProgress    UserTopicProgress[]
+  lessonProgress   UserLessonProgress[]
+  submissions      Submission[]
+  topicMastery     UserTopicMastery[]
+  reviewSchedules  ReviewSchedule[]
+  userQuests       UserQuest[]
+  achievements     UserAchievement[]
+  aiMessages       AIMessage[]
+  activityLogs     ActivityLog[]
+}
+
+// ---------------------------------------------------------------------------
+// Roadmap content
+// ---------------------------------------------------------------------------
+
+model Topic {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  title       String
+  description String
+  icon        String  @default("Sparkles") // lucide-react icon name
+  chapter     Int     @default(1)
+  order       Int     @default(0)
+  // slugs of topics that must be completed first (roadmap gating)
+  prerequisiteSlugs String[] @default([])
+
+  lessons  Lesson[]
+  problems Problem[]
+
+  userProgress UserTopicProgress[]
+  userMastery  UserTopicMastery[]
+}
+
+model Lesson {
+  id        String @id @default(cuid())
+  topicId   String
+  topic     Topic  @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  slug      String
+  title     String
+  content   String // markdown
+  order     Int    @default(0)
+  xpReward  Int    @default(20)
+
+  quizQuestions QuizQuestion[]
+  userProgress  UserLessonProgress[]
+
+  @@unique([topicId, slug])
+}
+
+model QuizQuestion {
+  id            String @id @default(cuid())
+  lessonId      String
+  lesson        Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  prompt        String
+  choices       Json   // string[]
+  correctIndex  Int
+  explanation   String
+  order         Int    @default(0)
+}
+
+model UserTopicProgress {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId     String
+  topic       Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  status      String   @default("LOCKED") // LOCKED | AVAILABLE | IN_PROGRESS | COMPLETED
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, topicId])
+}
+
+model UserLessonProgress {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonId    String
+  lesson      Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  completed   Boolean   @default(false)
+  quizScore   Int?      // percentage 0-100
+  completedAt DateTime?
+
+  @@unique([userId, lessonId])
+}
+
+// ---------------------------------------------------------------------------
+// Problems / challenges
+// ---------------------------------------------------------------------------
+
+model Problem {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  title         String
+  description   String   // markdown, includes examples
+  difficulty    String   // EASY | MEDIUM | HARD | BOSS
+  topicId       String
+  topic         Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  tags          String[] @default([])
+  patternTags   String[] @default([]) // e.g. "sliding-window", "two-pointer" — powers pattern recognition
+  xpReward      Int      @default(50)
+  coinReward    Int      @default(10)
+  isBossBattle  Boolean  @default(false)
+  order         Int      @default(0)
+
+  functionName  String   // name of the function the learner implements
+  starterCode   Json     // { "javascript": "...", "python": "..." }
+  solutionCode  Json?    // reference solution per language (used for local demo-mode grading fallback)
+  paramNames    String[] @default([]) // ordered parameter names, used to build call harnesses
+
+  timeLimitMs   Int      @default(2000)
+
+  testCases   TestCase[]
+  submissions Submission[]
+  reviewSchedules ReviewSchedule[]
+
+  whyThisProblem String? @map("why_this_problem") // short editorial note shown to the learner
+}
+
+model TestCase {
+  id        String  @id @default(cuid())
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  input     Json    // array of arguments, in paramNames order
+  expected  Json
+  isSample  Boolean @default(false)
+  order     Int     @default(0)
+}
+
+model Submission {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId   String
+  problem     Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  code        String
+  language    String
+  status      String   // PENDING | ACCEPTED | WRONG_ANSWER | RUNTIME_ERROR | TIME_LIMIT_EXCEEDED | COMPILE_ERROR
+  passedCount Int      @default(0)
+  totalCount  Int      @default(0)
+  runtimeMs   Int?
+  errorOutput String?
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Mastery & spaced repetition
+// ---------------------------------------------------------------------------
+
+model UserTopicMastery {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId       String
+  topic         Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  masteryScore  Int      @default(0) // 0-100, decays slightly over time, grows with correct solves
+  attempts      Int      @default(0)
+  solved        Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, topicId])
+}
+
+// SM-2-lite spaced repetition schedule, one row per (user, problem) once attempted
+model ReviewSchedule {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId      String
+  problem        Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  easeFactor     Float    @default(2.5)
+  intervalDays   Int      @default(1)
+  repetitions    Int      @default(0)
+  dueAt          DateTime @default(now())
+  lastReviewedAt DateTime?
+
+  @@unique([userId, problemId])
+}
+
+// ---------------------------------------------------------------------------
+// Quests & achievements
+// ---------------------------------------------------------------------------
+
+model Quest {
+  id          String @id @default(cuid())
+  key         String @unique
+  title       String
+  description String
+  type        String // DAILY | WEEKLY
+  goalType    String // SOLVE_PROBLEMS | SOLVE_DIFFICULTY | COMPLETE_LESSON | USE_AI_MENTOR | MAINTAIN_ACTIVITY
+  goalTarget  Int
+  goalFilter  String? // e.g. difficulty name, used with SOLVE_DIFFICULTY
+  xpReward    Int
+  coinReward  Int
+  icon        String @default("ScrollText")
+
+  userQuests UserQuest[]
+}
+
+model UserQuest {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questId      String
+  quest        Quest     @relation(fields: [questId], references: [id], onDelete: Cascade)
+  progress     Int       @default(0)
+  isCompleted  Boolean   @default(false)
+  completedAt  DateTime?
+  assignedFor  DateTime  @default(now()) // day (or week-start) this instance belongs to
+
+  @@unique([userId, questId, assignedFor])
+}
+
+model Achievement {
+  id            String @id @default(cuid())
+  key           String @unique
+  title         String
+  description   String
+  icon          String @default("Trophy")
+  criteriaType  String // TOTAL_SOLVES | STREAK_DAYS | BOSS_DEFEATED | TOPIC_MASTERED | LEVEL_REACHED
+  criteriaTarget Int
+  xpReward      Int    @default(0)
+  coinReward    Int    @default(0)
+
+  userAchievements UserAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  unlockedAt    DateTime    @default(now())
+
+  @@unique([userId, achievementId])
+}
+
+// ---------------------------------------------------------------------------
+// AI mentor
+// ---------------------------------------------------------------------------
+
+model AIMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId String?
+  mode      String   // HINT | SOCRATIC | DEBUG | COMPLEXITY | INTERVIEW
+  role      String   // user | assistant
+  content   String
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Activity feed (powers streaks + dashboard "recent activity")
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // LESSON_COMPLETED | PROBLEM_SOLVED | QUEST_COMPLETED | ACHIEVEMENT_UNLOCKED | LEVEL_UP
+  message   String
+  xpDelta   Int      @default(0)
+  coinDelta Int      @default(0)
+  createdAt DateTime @default(now())
+}
